@@ -1,0 +1,94 @@
+# Meridian Orders API: Docs vs Reality
+
+[Your Name] · Product Analyst Intern take-home
+
+## Task 1: What doesn't match
+
+**1. Pagination**
+- Docs: `has_more` tells you if there is another page.
+- Data: `orders_page1.json` says `has_more: false`, but it also has a `next_cursor`, and that cursor gives page 2 (two more orders).
+- Problem: A developer who trusts the docs stops at page 1 and misses orders. No error shows up.
+
+**2. Total does not add up**
+- Docs: `total` = subtotal + tax + shipping.
+- Data: `ord_1004` (`orders_page1.json`): 6200 + 511 + 599 = 7310, but `total` is 6810.
+- Problem: The amount is $5.00 off, and finance sums this field.
+
+**3. Different money format**
+- Docs: Money is in integer cents.
+- Data: `ord_1006` (`orders_page2.json`) has `total: 53.62`, which is dollars.
+- Problem: In a sum, it counts as 53 cents instead of $53.62.
+
+**4. Unknown status**
+- Docs: Status is pending, shipped, delivered or cancelled.
+- Data: `ord_1003` has `status: "refunded"`, and its total is still the full 10233.
+- Problem: The $102.33 refund can be counted as revenue.
+
+**5. Missing email**
+- Docs: `customer.email` is always present.
+- Data: `ord_1005` has `email: null`.
+- Problem: Code that needs an email will break.
+
+*Also noticed (smaller):* unknown order `ord_9999` returns 200 with `null` instead of 404, and the list is oldest first, not newest first.
+
+### The worst one: #1
+
+It fails silently. There is no error, so nobody knows orders are missing. It also hides the other bugs, because #3 and #5 are on page 2. In this data it drops $79.09 out of $328.03.
+
+## Task 2: Total revenue
+
+**Answer: $225.70**
+
+| Option | Amount |
+|---|---|
+| Page 1 only (the trap) | $248.94 |
+| All 6 orders | $328.03 |
+| **All orders minus the refund** | **$225.70** |
+| Same, if `ord_1004` is really 7310 | $230.70 |
+
+My choices:
+- I used both pages by following `next_cursor`.
+- I turned `ord_1006` into cents (53.62 → 5362).
+- I left out the refunded order, because that money was returned.
+- I used `total`, since Priya checks what customers paid.
+- I kept `ord_1004` at 6810, the amount the API reports.
+
+**What I can't tell from this data:**
+- Which `ord_1004` number is correct. I would need the payment record.
+- Whether the refund was full or partial. I would need the refund amount.
+- Whether there are more pages. I would need an order count.
+- What Priya's dashboard number is, and whether it removes refunds.
+
+## Task 3
+
+### Email to Priya
+
+**Subject:** Why your revenue number doesn't match
+
+Hi Priya,
+
+Your method was right. The problem is in what the API gives back. Four things can change your total:
+
+1. The first page says there are no more orders, but there are. We found two missing orders worth $79.09.
+2. Order ord_1003 ($102.33) is refunded but still shows its full amount.
+3. One order shows dollars (53.62) while the rest show cents (5362).
+4. Order ord_1004 is $5.00 lower than its parts add up to. We are still checking which is right.
+
+Could you send your dashboard total and tell me if it removes refunds? Then I can tell you which of these explains the gap.
+
+Best,
+[Your Name]
+
+### Bug report
+
+**Title:** `has_more` is false on a page that has a `next_cursor`
+
+**Steps**
+1. Call `GET /v1/orders`. It returns `has_more: false` and `next_cursor: "cur_8f2a19bd"`.
+2. Call `GET /v1/orders?starting_after=cur_8f2a19bd`. It returns `ord_1005` and `ord_1006`.
+
+**Actual:** Page 1 says there are no more results, but page 2 exists.
+
+**Expected:** `has_more` is `true` when another page exists.
+
+**Impact:** Clients that follow the docs miss 2 of 6 orders, with no error.
